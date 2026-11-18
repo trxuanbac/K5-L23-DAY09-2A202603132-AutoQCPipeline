@@ -27,13 +27,149 @@ Bẫy cần nghĩ tới (có test cho từng cái)
 
 Gợi ý: `yaml.safe_load / safe_dump`.
 """
-from collections import defaultdict  # noqa: F401
+from collections import defaultdict
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 
-import yaml  # noqa: F401
+import yaml
 
-from ..common import ERROR, parse_yolo_line  # noqa: F401
+from ..common import ERROR, ROOT, parse_yolo_line
+
+
+DROP_LINE_CODES = {"BAD_FORMAT", "BAD_CLASS_ID", "BOX_ZERO", "DUP_BOX"}
+REMOVE_IMAGE_CODES = {"LEAK_TEST", "CORRUPT_IMAGE", "BAD_SIZE"}
+
+
+def _change(image, action, before, after, line=None):
+    return dict(image=image, line=line, action=action, before=before, after=after)
+
+
+def _write_text(path, text):
+    # Ghi xong file tạm rồi thay file đích trong cùng thư mục.
+    temp_file = NamedTemporaryFile("w", encoding="utf-8", newline="", dir=path.parent, delete=False)
+    temp_path = Path(temp_file.name)
+    try:
+        with temp_file:
+            temp_file.write(text)
+        temp_path.replace(path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
+def _clip_line(text):
+    try:
+        class_id, cx, cy, width, height = parse_yolo_line(text)
+    except (ValueError, OverflowError):
+        return ""
+
+    left, right = cx - width / 2, cx + width / 2
+    top, bottom = cy - height / 2, cy + height / 2
+    clipped_left, clipped_right = max(0.0, left), min(1.0, right)
+    clipped_top, clipped_bottom = max(0.0, top), min(1.0, bottom)
+    clipped_width = clipped_right - clipped_left
+    clipped_height = clipped_bottom - clipped_top
+    if clipped_width <= 0 or clipped_height <= 0:
+        return ""
+    if (left, top, right, bottom) == (clipped_left, clipped_top, clipped_right, clipped_bottom):
+        return text
+
+    clipped_cx = clipped_left + clipped_width / 2
+    clipped_cy = clipped_top + clipped_height / 2
+    return f"{class_id} {clipped_cx:.12g} {clipped_cy:.12g} {clipped_width:.12g} {clipped_height:.12g}"
+
+
+def _fix_label_file(path, actions):
+    with path.open(encoding="utf-8", errors="replace", newline="") as label_file:
+        original_lines = label_file.read().splitlines(keepends=True)
+
+    fixed_lines = []
+    changes = []
+    for line_no, original in enumerate(original_lines, 1):
+        action = actions.get(line_no)
+        if action is None:
+            fixed_lines.append(original)
+            continue
+
+        before = original.splitlines()[0]
+        if action == "drop_line":
+            after = ""
+        else:
+            after = _clip_line(before)
+            if after == before:
+                fixed_lines.append(original)
+                continue
+            if not after:
+                action = "drop_line"
+
+        if after:
+            fixed_lines.append(after + original[len(before):])
+        changes.append(_change(path.stem, action, before, after, line=line_no))
+
+    if changes:
+        _write_text(path, "".join(fixed_lines))
+    return changes
+
+
+def _rename_classes(path, classes):
+    settings = yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else None
+    settings = settings or {}
+    before = settings.get("names")
+    after = list(classes) if isinstance(before, list) else dict(enumerate(classes))
+    if before == after:
+        return []
+
+    settings["names"] = after
+    _write_text(path, yaml.safe_dump(settings, allow_unicode=True, sort_keys=False))
+    return [_change(path.name, "rename_classes", str(before), str(after))]
 
 
 def fix(ds, issues, cfg):
-    # TODO
-    raise NotImplementedError("autofix chưa làm")
+    if ds.root.resolve().is_relative_to((ROOT / "data").resolve()):
+        raise ValueError("autofix cần thư mục làm việc chứa bản sao của dữ liệu")
+
+    removals = set()
+    missing_labels = set()
+    line_actions = defaultdict(dict)
+    rename_classes = False
+    for issue in issues:
+        if issue.severity != ERROR:
+            continue
+        code, stem, line_no = issue.code, issue.image, issue.line
+        if code in REMOVE_IMAGE_CODES or code.startswith("DUP_IMAGE_"):
+            removals.add(stem)
+        elif code == "MISSING_LABEL_FILE":
+            missing_labels.add(stem)
+        elif code == "BAD_CLASS_NAME":
+            rename_classes = True
+        elif line_no is not None:
+            if code in DROP_LINE_CODES:
+                line_actions[stem][line_no] = "drop_line"
+            elif code == "BOX_OUT_OF_IMAGE":
+                line_actions[stem].setdefault(line_no, "clip_box")
+
+    image_paths = defaultdict(list)
+    for path in ds.image_files():
+        image_paths[path.stem].append(path)
+    label_paths = {path.stem: path for path in ds.label_files()}
+
+    changes = []
+    for stem in sorted(removals):
+        paths = image_paths.pop(stem, [])
+        label_path = label_paths.pop(stem, None)
+        if label_path is not None:
+            paths.append(label_path)
+        if paths:
+            for path in paths:
+                path.unlink(missing_ok=True)
+            changes.append(_change(stem, "remove_image", ", ".join(path.name for path in paths), ""))
+
+    for stem in sorted(line_actions.keys() & label_paths.keys()):
+        changes.extend(_fix_label_file(label_paths[stem], line_actions[stem]))
+
+    if rename_classes:
+        changes.extend(_rename_classes(ds.yaml_path, cfg["classes"]))
+
+    for stem in sorted((missing_labels & image_paths.keys()) - label_paths.keys()):
+        changes.append(_change(stem, "needs_label", "(không có file)", "chuyển người gán"))
+
+    return changes
