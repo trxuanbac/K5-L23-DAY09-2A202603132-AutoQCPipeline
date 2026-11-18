@@ -59,12 +59,22 @@ Ba mẫu đối chiếu trên nhãn gốc gồm `img_0020` dòng 3 có ID lớp 
 
 ## 5. Train raw vs clean
 
-Chưa chạy. Lần nộp này tập trung kiểm chứng pipeline và hoàn thành phần lõi.
+Hai bộ dùng cùng YOLO26n, 20 epoch, ảnh 640 px, batch 16, seed 0 và 1. Cả hai dùng chung 40 ảnh val và 100 ảnh test. Bảng ghi trung bình ± độ lệch chuẩn mẫu giữa hai seed. [Kết quả do script sinh](results/comparison.md)
+
+| Bộ dữ liệu | File ảnh train | mAP50 | mAP50–95 | Precision | Recall |
+|---|---:|---:|---:|---:|---:|
+| raw | 224 | 0.726 ± 0.000 | 0.512 ± 0.004 | 0.764 ± 0.061 | 0.649 ± 0.028 |
+| clean | 205 | 0.682 ± 0.047 | 0.469 ± 0.025 | 0.718 ± 0.111 | 0.603 ± 0.012 |
+
+Raw có mAP50 cao hơn ở cả hai seed. Chênh lệch clean − raw lần lượt là −0.0768 và −0.0102. Tính từ từng lượt train, clean thấp hơn trung bình khoảng 0.043, gần với độ lệch chuẩn 0.047 của clean. Kết quả quan sát nghiêng về raw trên tập test này. Cần thêm seed ghép cặp để đánh giá độ ổn định của mức chênh.
+
+- Raw có bốn ảnh bị cờ `LEAK_TEST`. Nếu được dùng khi train, các ảnh trùng với test có thể làm điểm raw cao hơn. Kiểm tra bằng cách đánh giá cả hai mô hình đã train trên cùng tập con test sau khi bỏ bốn ảnh đối ứng. [Báo cáo nhận dữ liệu](reports/01_intake.csv)
+- Hai bộ khác nhau về danh sách ảnh và nội dung nhãn. AP50 trung bình của lớp `truck` giảm từ 0.648 ở raw xuống 0.514 ở clean. Đối chiếu số box `truck` dùng khi train và chạy đối chứng trên cùng danh sách 205 ảnh với hai phiên bản nhãn để tách ảnh hưởng của việc chọn ảnh và sửa nhãn.
 
 ## 6. Quyết định và ghi chú AI
 
 Giữ quyết định **Hold**. Với lô 205 ảnh và 0 lỗi bắt buộc, cần xử lý cảnh báo trên ít nhất 44 trong 64 ảnh còn lại để còn tối đa 20/205 ảnh (9,76%), dưới ngưỡng 10%. Sau lượt duyệt bổ sung cần chạy lại QC để xác nhận cả hai điều kiện. [Tóm tắt lần chạy](reports/08_summary.json)
 
-- Prompt chính gồm traceback `NotImplementedError` và yêu cầu triển khai lần lượt các module theo `GUIDE.md`. Đặc tả dùng nhãn YOLO và cache dự đoán làm đầu vào, áp dụng các quy tắc trong docstring, trả lỗi có số dòng hoặc log sửa và thao tác trên bản sao dữ liệu.
+- Prompt chính gồm traceback `NotImplementedError` và yêu cầu triển khai lần lượt các module theo `GUIDE.md`. Đặc tả dùng nhãn YOLO và cache dự đoán làm đầu vào, áp dụng các quy tắc trong docstring, trả lỗi có số dòng hoặc log sửa và thao tác trên bản sao dữ liệu. Ở phần train, yêu cầu hỗ trợ là đối chiếu kết quả với manifest, tổng hợp hai seed và viết mục 5 theo rubric từ số liệu đã tải về.
 - Kiểm chứng bằng 79 test, đối chiếu các lỗi chèn trên `calib` và kiểm tra kết quả ở hai ngân sách duyệt 0 và 80.
 - AI từng gọi `clean_v1` là “bản xuất chính thức” khi gate kết luận Hold. Đối chiếu manifest và sửa mô tả thành bản nháp Hold.
