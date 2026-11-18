@@ -1,0 +1,18 @@
+{
+  "verdict": {
+    "decision": "Hold",
+    "n_errors": 0,
+    "n_warn_images": 64,
+    "n_images": 205,
+    "warn_ratio": 0.3122,
+    "reasons": [
+      "64/205 ảnh còn cảnh báo, đạt hoặc vượt ngưỡng 10.00%."
+    ]
+  },
+  "reviewed": 80,
+  "budget": 80,
+  "seconds": 2.9,
+  "exported": "/Users/chuoi/tool/K5-L23-DAY09-2A202603132-AutoQCPipeline/submission/export/clean_v1",
+  "config_sha1": "476270da70e8f7b47cf955365e0a4a8abfb00202",
+  "review_sim_sha1": "7988ca22827f780a7043a2300490e679a1697154"
+}
